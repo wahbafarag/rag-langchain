@@ -4,10 +4,16 @@ import { createRetrieverTool } from "@langchain/classic/agents/toolkits";
 import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import {
+  HumanMessage,
+  SystemMessage,
+  AIMessage,
+  ToolMessage,
+} from "@langchain/core/messages";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { ChatOpenAI } from "@langchain/openai";
-import { ToolMessage } from "@langchain/core/messages";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+import * as z from "zod";
 
 async function main() {
   // -------------------------------------------
@@ -144,5 +150,68 @@ async function main() {
   // console.log(result.messages[0]);
 
   //
+
+  const prompt = ChatPromptTemplate.fromTemplate(
+    `You are a grader assessing relevance of retrieved docs to a user question.
+  Here are the retrieved docs:
+  \n ------- \n
+  {context}
+  \n ------- \n
+  Here is the user question: {question}
+  If the content of the docs are relevant to the users question, score them as relevant.
+  Give a binary score 'yes' or 'no' score to indicate whether the docs are relevant to the question.
+  Yes: The docs are relevant to the question.
+  No: The docs are not relevant to the question.`
+  );
+
+  const gradeDocumentsSchema = z.object({
+    binaryScore: z.string().describe("Relevance score 'yes' or 'no'"),
+  });
+
+  async function gradeDocuments(state) {
+    const { messages } = state;
+
+    const model = new ChatOpenAI({
+      configuration: { baseURL: "http://127.0.0.1:1234/v1" },
+      model: "granite-4.0-h-tiny",
+      temperature: 0,
+    }).withStructuredOutput(gradeDocumentsSchema);
+
+    // 1
+    const score = await prompt.pipe(model).invoke({
+      question: messages.at(0).content,
+      context: messages.at(-1).content,
+    });
+
+    if (score.binaryScore === "yes") return "generate";
+    return "rewrite";
+  }
+
+  // 2
+
+  const input = {
+    messages: [
+      new HumanMessage(
+        "What does Lilian Weng say about types of reward hacking?"
+      ),
+      new AIMessage({
+        tool_calls: [
+          {
+            type: "tool_call",
+            name: "retrieve_blog_posts",
+            args: { query: "types of reward hacking" },
+            id: "1",
+          },
+        ],
+      }),
+      new ToolMessage({
+        content:
+          "reward hacking can be categorized into two types: environment or goal misspecification, and reward tampering",
+        tool_call_id: "1",
+      }),
+    ],
+  };
+  const result = await gradeDocuments(input);
+  console.log("Grading result (should be 'rewrite'):", result);
 }
 main().catch(console.error);

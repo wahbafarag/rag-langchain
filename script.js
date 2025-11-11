@@ -128,11 +128,13 @@ console.log("🤖 Running test query...");
 
 // 4- Grading Docs
 /***
- * Add a node — gradeDocuments — to determine whether the retrieved
- * documents are relevant to the question. We will use a model with
- * structured output using Zod for document grading. We’ll also add a
- * conditional edge — checkRelevance — that checks the grading result
- * and returns the name of the node to go to (generate or rewrite):
+ * 1- Add a node — gradeDocuments — to determine whether the retrieved
+ *    documents are relevant to the question. We will use a model with
+ *    structured output using Zod for document grading. We’ll also add a
+ *    conditional edge — checkRelevance — that checks the grading result
+ *    and returns the name of the node to go to (generate or rewrite):
+ *
+ * 2- Run this with irrelevant documents in the tool response:
  */
 
 const prompt = ChatPromptTemplate.fromTemplate(
@@ -147,3 +149,52 @@ const prompt = ChatPromptTemplate.fromTemplate(
   Yes: The docs are relevant to the question.
   No: The docs are not relevant to the question.`
 );
+
+const gradeDocumentsSchema = z.object({
+  binaryScore: z.string().describe("Relevance score 'yes' or 'no'"),
+});
+
+async function gradeDocuments(state) {
+  const { messages } = state;
+
+  const model = new ChatOpenAI({
+    configuration: { baseURL: "http://127.0.0.1:1234/v1" },
+    model: "granite-4.0-h-tiny",
+    temperature: 0,
+  }).withStructuredOutput(gradeDocumentsSchema);
+
+  // 1
+  const score = await prompt.pipe(model).invoke({
+    question: messages.at(0).content,
+    context: messages.at(-1).content,
+  });
+
+  if (score.binaryScore === "yes") return "generate";
+  return "rewrite";
+}
+
+// 2
+
+const input = {
+  messages: [
+    new HumanMessage(
+      "What does Lilian Weng say about types of reward hacking?"
+    ),
+    new AIMessage({
+      tool_calls: [
+        {
+          type: "tool_call",
+          name: "retrieve_blog_posts",
+          args: { query: "types of reward hacking" },
+          id: "1",
+        },
+      ],
+    }),
+    new ToolMessage({
+      content: "meow",
+      tool_call_id: "1",
+    }),
+  ],
+};
+const result = await gradeDocuments(input);
+console.log("Grading result (should be 'rewrite'):", result);
