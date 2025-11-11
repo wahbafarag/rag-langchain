@@ -39,36 +39,6 @@ async function main() {
   // use in-memory vector store , openai embeddings
   console.log("Creating vector store , retriever...");
 
-  // const vector = await MemoryVectorStore.fromDocuments(
-  //   splitDocs,
-  //   new OpenAIEmbeddings()
-  // );
-
-  // const vector = await MemoryVectorStore.fromDocuments(
-  //   splitDocs,
-  //   new HuggingFaceInferenceEmbeddings({
-  //     apiKey: process.env.HUGGINGFACE_API_KEY,
-  //     model: "sentence-transformers/all-MiniLM-L6-v2",
-  //   })
-  // );
-
-  // const vector = await MemoryVectorStore.fromDocuments(
-  //   splitDocs,
-  //   new LMStudioEmbeddings({
-  //     apiUrl: "http://localhost:11434",
-  //     model: "TinyLlama-1.1B-Chat-v1.0-GGUF",
-  //   })
-  // );
-
-  // const vector = await MemoryVectorStore.fromDocuments(
-  //   splitDocs,
-  //   new HuggingFaceInferenceEmbeddings({
-  //     apiUrl: "http://localhost:11434",
-  //     model: "nomic-embed-text-v1.5-GGUF",
-  //     provider: "local",
-  //   })
-  // );
-
   const vector = await MemoryVectorStore.fromDocuments(
     splitDocs,
     new OpenAIEmbeddings({
@@ -132,13 +102,12 @@ async function main() {
           `Tool result length: ${String(toolResult).length} characters`
         );
 
-        // ✅ Correct message shape
         const toolMessage = new ToolMessage({
           content:
             typeof toolResult === "string"
               ? toolResult
               : JSON.stringify(toolResult),
-          tool_call_id: toolCall.id, // important
+          tool_call_id: toolCall.id,
         });
 
         response = await model.invoke([...messages, response, toolMessage]);
@@ -155,6 +124,11 @@ async function main() {
 
   // Test the function
   // console.log("🤖 Running test query...");
+
+  // const input = { messages: [new HumanMessage("hello!")] };
+  // const result = await generateQueryOrRespond(input);
+  // console.log(result.messages[0]);
+
   // const input = {
   //   messages: [
   //     new SystemMessage(

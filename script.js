@@ -16,26 +16,34 @@ import * as z from "zod";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 
 // -------------------------------------------
+// -------------------------------------------
+
 // 1- Preprocess documents
+/**
+ * 1- fetch documents to use in our RAG system
+ * 2- Split the fetched documents into smaller chunks for indexing into our vectorstore:
+ */
 const urls = [
   "https://lilianweng.github.io/posts/2023-06-23-agent/",
   "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
   "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
 ];
 
-// fetch documents to use in our RAG system
+// 1
 const docs = await Promise.all(
   urls.map((url) => new CheerioWebBaseLoader(url).load())
 );
 
-// Split the fetched documents into smaller chunks for indexing into our vectorstore:
+// 2
 const docsFlat = docs.flat();
 const textSplitter = new RecursiveCharacterTextSplitter({
   chunkSize: 500,
   chunkOverlap: 50,
 });
 const splitDocs = await textSplitter.splitDocuments(docsFlat);
-console.log(`Split into ${splitDocs.length} chunks of documents.`);
+
+// -------------------------------------------
+// -------------------------------------------
 
 // 2- Create a retriever tool
 /**
@@ -65,6 +73,7 @@ const tool = createRetrieverTool(retriever, {
 const tools = [tool];
 
 // -------------------------------------------
+// -------------------------------------------
 
 // 3- Generate query (build node - edges)
 /**
@@ -82,17 +91,10 @@ async function generateQueryOrRespond(state) {
 
   let response = await model.invoke(messages);
 
-  console.log("First model response:", {
-    content: response.content,
-    hasToolCalls: response.tool_calls?.length > 0,
-    toolCalls: response.tool_calls,
-  });
-
   // Process tool calls
   if (response.tool_calls && response.tool_calls.length > 0) {
     for (const toolCall of response.tool_calls) {
-      // console.log("Executing tool call:", toolCall.name, toolCall.args);
-
+      //
       const toolObj = tools.find((t) => t.name === toolCall.name);
       let toolResult = "Tool not found";
 
@@ -104,10 +106,6 @@ async function generateQueryOrRespond(state) {
         toolResult = `Error running tool ${toolCall.name}: ${err.message}`;
       }
 
-      // console.log(
-      //   `Tool result length: ${String(toolResult).length} characters`
-      // );
-
       const toolMessage = new ToolMessage({
         content:
           typeof toolResult === "string"
@@ -117,11 +115,6 @@ async function generateQueryOrRespond(state) {
       });
 
       response = await model.invoke([...messages, response, toolMessage]);
-
-      // console.log("Final response (after tool):", {
-      //   content: response.content,
-      //   hasToolCalls: response.tool_calls?.length > 0,
-      // });
     }
   }
 
@@ -129,24 +122,6 @@ async function generateQueryOrRespond(state) {
 }
 
 console.log("🤖 Running test query...");
-
-// const input = { messages: [new HumanMessage("hello!")] };
-// const result = await generateQueryOrRespond(input);
-// console.log(result.messages[0]);
-
-// const input = {
-//   messages: [
-//     new SystemMessage(
-//       "You are a research assistant who can use tools to answer questions accurately using Lilian Weng’s blog."
-//     ),
-
-//     new HumanMessage(
-//       "What does Lilian Weng say about types of reward hacking?"
-//     ),
-//   ],
-// };
-// const result = await generateQueryOrRespond(input);
-// console.log(result.messages[0]);
 
 // -------------------------------------------
 // -------------------------------------------
