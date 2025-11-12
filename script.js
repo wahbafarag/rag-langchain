@@ -14,7 +14,13 @@ import { OpenAIEmbeddings } from "@langchain/openai";
 import { ChatOpenAI } from "@langchain/openai";
 import * as z from "zod";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { StateGraph, START, END } from "@langchain/langgraph";
+import {
+  Annotation,
+  StateGraph,
+  START,
+  END,
+  messagesStateReducer,
+} from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 
 // -------------------------------------------
@@ -93,7 +99,16 @@ async function generateQueryOrRespond(state) {
     maxTokens: 500,
   }).bindTools(tools);
 
-  let response = await model.invoke(messages);
+  const cleanMessages = messages.filter(
+    (m) =>
+      m instanceof HumanMessage ||
+      m instanceof AIMessage ||
+      m instanceof ToolMessage
+  );
+
+  let response = await model.invoke(cleanMessages);
+
+  console.log("AIMessage tool_calls:", response.tool_calls?.length);
 
   // Process tool calls
 
@@ -115,6 +130,8 @@ async function generateQueryOrRespond(state) {
           toolResult = `Error: ${err.message}`;
         }
 
+        console.log("AIMessage tool_calls:", response.tool_calls?.length);
+
         return new ToolMessage({
           content:
             typeof toolResult === "string"
@@ -132,7 +149,7 @@ async function generateQueryOrRespond(state) {
     console.log("DEBUG: No tool calls made, direct response");
   }
 
-  return { messages: [response] };
+  return { messages: [...messages, response] };
 }
 
 console.log("🤖 Running test query...");
@@ -189,29 +206,29 @@ async function gradeDocuments(state) {
 
 // 2
 
-const gradeInput = {
-  messages: [
-    new HumanMessage(
-      "What does Lilian Weng say about types of reward hacking?"
-    ),
-    new AIMessage({
-      tool_calls: [
-        {
-          type: "tool_call",
-          name: "retrieve_blog_posts",
-          args: { query: "types of reward hacking" },
-          id: "1",
-        },
-      ],
-    }),
-    new ToolMessage({
-      content: "meow",
-      tool_call_id: "1",
-    }),
-  ],
-};
-const gradeResult = await gradeDocuments(gradeInput);
-console.log("Grading result (should be 'rewrite'):", gradeResult);
+// const gradeInput = {
+//   messages: [
+//     new HumanMessage(
+//       "What does Lilian Weng say about types of reward hacking?"
+//     ),
+//     new AIMessage({
+//       tool_calls: [
+//         {
+//           type: "tool_call",
+//           name: "retrieve_blog_posts",
+//           args: { query: "types of reward hacking" },
+//           id: "1",
+//         },
+//       ],
+//     }),
+//     new ToolMessage({
+//       content: "meow",
+//       tool_call_id: "1",
+//     }),
+//   ],
+// };
+// const gradeResult = await gradeDocuments(gradeInput);
+// console.log("Grading result (should be 'rewrite'):", gradeResult);
 
 // -------------------------------------------
 // -------------------------------------------
@@ -243,35 +260,33 @@ async function rewrite(state) {
   });
 
   const response = await rewritePrompt.pipe(model).invoke({ question });
-  return {
-    messages: [response],
-  };
+  return { messages: [...messages, response] };
 }
 
 // 2- Run the rewrite node
 
-const rewriteInput = {
-  messages: [
-    new HumanMessage(
-      "What does Lilian Weng say about types of reward hacking?"
-    ),
-    new AIMessage({
-      content: "",
-      tool_calls: [
-        {
-          id: "1",
-          name: "retrieve_blog_posts",
-          args: { query: "types of reward hacking" },
-          type: "tool_call",
-        },
-      ],
-    }),
-    new ToolMessage({ content: "meow", tool_call_id: "1" }),
-  ],
-};
+// const rewriteInput = {
+//   messages: [
+//     new HumanMessage(
+//       "What does Lilian Weng say about types of reward hacking?"
+//     ),
+//     new AIMessage({
+//       content: "",
+//       tool_calls: [
+//         {
+//           id: "1",
+//           name: "retrieve_blog_posts",
+//           args: { query: "types of reward hacking" },
+//           type: "tool_call",
+//         },
+//       ],
+//     }),
+//     new ToolMessage({ content: "meow", tool_call_id: "1" }),
+//   ],
+// };
 
-const rewriteResponse = await rewrite(rewriteInput);
-console.log(rewriteResponse.messages[0].content);
+// const rewriteResponse = await rewrite(rewriteInput);
+// console.log(rewriteResponse.messages[0].content);
 
 // -------------------------------------------
 // -------------------------------------------
@@ -309,37 +324,35 @@ async function generate(state) {
     question,
   });
 
-  return {
-    messages: [response],
-  };
+  return { messages: [...messages, response] };
 }
 
-const generateInput = {
-  messages: [
-    new HumanMessage(
-      "What does Lilian Weng say about types of reward hacking?"
-    ),
-    new AIMessage({
-      content: "",
-      tool_calls: [
-        {
-          id: "1",
-          name: "retrieve_blog_posts",
-          args: { query: "types of reward hacking" },
-          type: "tool_call",
-        },
-      ],
-    }),
-    new ToolMessage({
-      content:
-        "reward hacking can be categorized into two types: environment or goal misspecification, and reward tampering",
-      tool_call_id: "1",
-    }),
-  ],
-};
+// const generateInput = {
+//   messages: [
+//     new HumanMessage(
+//       "What does Lilian Weng say about types of reward hacking?"
+//     ),
+//     new AIMessage({
+//       content: "",
+//       tool_calls: [
+//         {
+//           id: "1",
+//           name: "retrieve_blog_posts",
+//           args: { query: "types of reward hacking" },
+//           type: "tool_call",
+//         },
+//       ],
+//     }),
+//     new ToolMessage({
+//       content:
+//         "reward hacking can be categorized into two types: environment or goal misspecification, and reward tampering",
+//       tool_call_id: "1",
+//     }),
+//   ],
+// };
 
-const generateResponse = await generate(generateInput);
-console.log(generateResponse.messages[0].content);
+// const generateResponse = await generate(generateInput);
+// console.log(generateResponse.messages[0].content);
 
 // -------------------------------------------
 // -------------------------------------------
@@ -355,3 +368,75 @@ console.log(generateResponse.messages[0].content);
  *    - If not relevant, rewrite the question using rewrite and then call generateQueryOrRespond again
  *    - If relevant, proceed to generate and generate final response using the @[ToolMessage] with the retrieved document context
  */
+
+// Create a ToolNode for the retriever
+const toolNode = new ToolNode(tools);
+
+// Helper function to determine if we should retrieve
+function shouldRetrieve(state) {
+  const { messages } = state;
+  const lastMessage = messages.at(-1);
+
+  if (AIMessage.isInstance(lastMessage) && lastMessage.tool_calls.length) {
+    return "retrieve";
+  }
+  return END;
+}
+
+const GraphState = Annotation.Root({
+  messages: Annotation({
+    reducer: messagesStateReducer,
+    default: () => [],
+  }),
+  grade: Annotation.String,
+});
+
+// Define the graph
+const builder = new StateGraph(GraphState)
+  .addNode("generateQueryOrRespond", generateQueryOrRespond)
+  .addNode("retrieve", toolNode)
+  .addNode("gradeDocuments", gradeDocuments)
+  .addNode("rewrite", rewrite)
+  .addNode("generate", generate)
+  // Add edges
+  .addEdge(START, "generateQueryOrRespond")
+  // Decide whether to retrieve
+  .addConditionalEdges("generateQueryOrRespond", shouldRetrieve)
+  .addEdge("retrieve", "gradeDocuments")
+  // Edges taken after grading documents
+  .addConditionalEdges(
+    "gradeDocuments",
+    // Route based on grading decision
+    (state) => {
+      // The gradeDocuments function returns either "generate" or "rewrite"
+      const lastMessage = state.messages.at(-1);
+      return lastMessage.content === "generate" ? "generate" : "rewrite";
+    }
+  )
+  .addEdge("generate", END)
+  .addEdge("rewrite", "generateQueryOrRespond");
+
+// Compile
+const graph = builder.compile();
+
+// 8- Run the agentic RAG
+const inputs = {
+  messages: [
+    new HumanMessage(
+      "reward hacking can be categorized into two types: environment or goal misspecification, and reward tampering"
+    ),
+  ],
+};
+
+for await (const output of await graph.stream(inputs)) {
+  for (const [key, value] of Object.entries(output)) {
+    const lastMsg = output[key].messages[output[key].messages.length - 1];
+    console.log(`Output from node: '${key}'`);
+    console.log({
+      type: lastMsg._getType(),
+      content: lastMsg.content,
+      tool_calls: lastMsg.tool_calls,
+    });
+    console.log("---\n");
+  }
+}
