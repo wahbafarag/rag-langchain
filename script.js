@@ -14,6 +14,8 @@ import { OpenAIEmbeddings } from "@langchain/openai";
 import { ChatOpenAI } from "@langchain/openai";
 import * as z from "zod";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { StateGraph, START, END } from "@langchain/langgraph";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
 
 // -------------------------------------------
 // -------------------------------------------
@@ -55,7 +57,6 @@ console.log("Creating vector store , retriever...");
 const vector = await MemoryVectorStore.fromDocuments(
   splitDocs,
   new OpenAIEmbeddings({
-    // openAIApiKey: "not-needed",
     configuration: {
       baseURL: "http://127.0.0.1:1234/v1", // LM Studio
     },
@@ -84,38 +85,51 @@ async function generateQueryOrRespond(state) {
   const { messages } = state;
 
   const model = new ChatOpenAI({
-    configuration: { baseURL: "http://127.0.0.1:1234/v1" },
+    configuration: {
+      baseURL: "http://127.0.0.1:1234/v1",
+    },
     model: "granite-4.0-h-tiny",
     temperature: 0,
+    maxTokens: 500,
   }).bindTools(tools);
 
   let response = await model.invoke(messages);
 
   // Process tool calls
-  if (response.tool_calls && response.tool_calls.length > 0) {
-    for (const toolCall of response.tool_calls) {
-      //
-      const toolObj = tools.find((t) => t.name === toolCall.name);
-      let toolResult = "Tool not found";
 
-      try {
-        if (toolObj) {
-          toolResult = await toolObj.invoke(toolCall.args);
+  if (response.tool_calls?.length > 0) {
+    // Execute all tools in parallel
+
+    const toolResponses = await Promise.all(
+      response.tool_calls.map(async (toolCall) => {
+        //
+
+        const toolObj = tools.find((t) => t.name === toolCall.name);
+        let toolResult = "Tool execution error";
+
+        try {
+          if (toolObj) {
+            toolResult = await toolObj.invoke(toolCall.args);
+          }
+        } catch (err) {
+          toolResult = `Error: ${err.message}`;
         }
-      } catch (err) {
-        toolResult = `Error running tool ${toolCall.name}: ${err.message}`;
-      }
 
-      const toolMessage = new ToolMessage({
-        content:
-          typeof toolResult === "string"
-            ? toolResult
-            : JSON.stringify(toolResult),
-        tool_call_id: toolCall.id,
-      });
+        return new ToolMessage({
+          content:
+            typeof toolResult === "string"
+              ? toolResult
+              : JSON.stringify(toolResult),
+          tool_call_id: toolCall.id,
+        });
+      })
+    );
 
-      response = await model.invoke([...messages, response, toolMessage]);
-    }
+    const updatedMessages = [...messages, response, ...toolResponses];
+
+    response = await model.invoke(updatedMessages);
+  } else {
+    console.log("DEBUG: No tool calls made, direct response");
   }
 
   return { messages: [response] };
@@ -175,7 +189,7 @@ async function gradeDocuments(state) {
 
 // 2
 
-const input = {
+const gradeInput = {
   messages: [
     new HumanMessage(
       "What does Lilian Weng say about types of reward hacking?"
@@ -196,5 +210,148 @@ const input = {
     }),
   ],
 };
-const result = await gradeDocuments(input);
-console.log("Grading result (should be 'rewrite'):", result);
+const gradeResult = await gradeDocuments(gradeInput);
+console.log("Grading result (should be 'rewrite'):", gradeResult);
+
+// -------------------------------------------
+// -------------------------------------------
+
+// 5- Rewrite question
+/**
+ * 1- Build the rewrite node. The retriever tool can return potentially
+ *    irrelevant documents, which indicates a need to improve the original
+ *    user question. To do so, we will call the rewrite node:
+ */
+
+const rewritePrompt = ChatPromptTemplate.fromTemplate(
+  `Look at the input and try to reason about the underlying semantic intent / meaning. \n
+  Here is the initial question:
+  \n ------- \n
+  {question}
+  \n ------- \n
+  Formulate an improved question:`
+);
+
+async function rewrite(state) {
+  const { messages } = state;
+  const question = messages.at(0)?.content;
+
+  const model = new ChatOpenAI({
+    configuration: { baseURL: "http://127.0.0.1:1234/v1" },
+    model: "granite-4.0-h-tiny",
+    temperature: 0,
+  });
+
+  const response = await rewritePrompt.pipe(model).invoke({ question });
+  return {
+    messages: [response],
+  };
+}
+
+// 2- Run the rewrite node
+
+const rewriteInput = {
+  messages: [
+    new HumanMessage(
+      "What does Lilian Weng say about types of reward hacking?"
+    ),
+    new AIMessage({
+      content: "",
+      tool_calls: [
+        {
+          id: "1",
+          name: "retrieve_blog_posts",
+          args: { query: "types of reward hacking" },
+          type: "tool_call",
+        },
+      ],
+    }),
+    new ToolMessage({ content: "meow", tool_call_id: "1" }),
+  ],
+};
+
+const rewriteResponse = await rewrite(rewriteInput);
+console.log(rewriteResponse.messages[0].content);
+
+// -------------------------------------------
+// -------------------------------------------
+
+// 6- Generating answer
+/***
+ * Build generate node: if we pass the grader checks, we can generate
+ * the final answer based on the original question and the retrieved context:
+ */
+
+async function generate(state) {
+  const { messages } = state;
+  const question = messages.at(0)?.content;
+  const context = messages.at(-1)?.content;
+
+  const prompt = ChatPromptTemplate.fromTemplate(
+    `You are an assistant for question-answering tasks.
+      Use the following pieces of retrieved context to answer the question.
+      If you don't know the answer, just say that you don't know.
+      Use three sentences maximum and keep the answer concise.
+      Question: {question}
+      Context: {context}`
+  );
+
+  const model = new ChatOpenAI({
+    configuration: { baseURL: "http://127.0.0.1:1234/v1" },
+    model: "granite-4.0-h-tiny",
+    temperature: 0,
+  });
+
+  const ragChain = prompt.pipe(model);
+
+  const response = await ragChain.invoke({
+    context,
+    question,
+  });
+
+  return {
+    messages: [response],
+  };
+}
+
+const generateInput = {
+  messages: [
+    new HumanMessage(
+      "What does Lilian Weng say about types of reward hacking?"
+    ),
+    new AIMessage({
+      content: "",
+      tool_calls: [
+        {
+          id: "1",
+          name: "retrieve_blog_posts",
+          args: { query: "types of reward hacking" },
+          type: "tool_call",
+        },
+      ],
+    }),
+    new ToolMessage({
+      content:
+        "reward hacking can be categorized into two types: environment or goal misspecification, and reward tampering",
+      tool_call_id: "1",
+    }),
+  ],
+};
+
+const generateResponse = await generate(generateInput);
+console.log(generateResponse.messages[0].content);
+
+// -------------------------------------------
+// -------------------------------------------
+
+// 7- Assemble the graph
+/**
+ * Now we’ll assemble all the nodes and edges into a complete graph:
+ *  * Start with a generateQueryOrRespond and determine if we need to call the retriever tool
+ *  * Route to next step using a conditional edge:
+ *    - If generateQueryOrRespond returned tool_calls, call the retriever tool to retrieve context
+ *    - Otherwise, respond directly to the user
+ *  * Grade retrieved document content for relevance to the question (gradeDocuments) and route to next step:
+ *    - If not relevant, rewrite the question using rewrite and then call generateQueryOrRespond again
+ *    - If relevant, proceed to generate and generate final response using the @[ToolMessage] with the retrieved document context
+ */
